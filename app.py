@@ -1,3 +1,4 @@
+from ntpath import join
 from flask import Flask, render_template, request, redirect, url_for, session, flash, g
 from werkzeug.security import generate_password_hash, check_password_hash
 from cryptography.fernet import Fernet
@@ -869,7 +870,7 @@ def loop_color(user_id):
 
 # ----- Functions to be implemented are below
 
-# Task 3.1
+# Task 3.3
 def recommend(user_id, filter_following):
     """
     Args:
@@ -932,12 +933,88 @@ def moderate_content(content):
     Then, navigate to the /admin endpoint. (http://localhost:8080/admin)
     """
 
+    #1.1: Severe violation check
+    for word in TIER1_WORDS:
+        pattern_11=r'\b('+re.escape(word)+r')\b'
+        if re.search(pattern_11,content,flags=re.IGNORECASE):
+            return("[content removed due to severe violation]",5) #DONE
+
+    for phrases in TIER2_PHRASES:
+        pattern_12=re.escape(phrases)
+        if re.search(pattern_12,content,flags=re.IGNORECASE):
+            return("[content removed due to spam/scam policy]",5) #DONE
+        
+    #1.2: Severe violation/ filtering                
     moderated_content = content
     score = 0
+
+    #1.2.1: TIER3
+    for word in TIER3_WORDS:
+        pattern121=r'\b('+re.escape(word)+r')\b'
+        count=len(re.findall(pattern121,moderated_content,flags=re.IGNORECASE))
+
+        if count>0:
+            score +=count*2.0
+
+        moderated_content=re.sub(pattern121,lambda m:'*'*len(m.group(0)),moderated_content,flags=re.IGNORECASE)
+
+    #1.2.2: External links
+    #original regex from website: "^((?:http(?:s)?:\/\/)?)((?:www\.)?[a-zA-Z0-9@:%._\+~#=]{2,256}\.[a-z]{2,6}\b)((?:\:\d+)?)((?:[-\w@:%\+.~#&/=]*)?)((?:\?[-\w%\+.~#&=]*)?)$"img
+    #deleted ^ and $ (start and end) to match longer sentences
+    #replaced \. with (?:[.]|\.) to handle [.] domains
+    url=r"((?:http(?:s)?://)?)((?:www\.)?[a-zA-Z0-9@:%._\+~#=]{2,256}(?:[.]|\.)[a-z]{2,6}\b)((?::\d+)?)((?:[-\w@:%\+.~#&/=]*)?)((?:\?[-\w%\+.~#&=]*)?)"
+    replace="[link removed]"
+    while True:
+
+        match=re.search(url,moderated_content,flags=re.IGNORECASE)
+        if match:
+            score +=2.0
+            link_text=match.group(0)
+            start_index=match.start()
+
+            moderated_content=(moderated_content[:start_index]+replace+
+                               moderated_content[start_index+len(link_text):])
+
+        else:
+            break
+
+    #1.2.3: Excessive capitalization:
+    letter_count=0
+    uppercase_count=0
+
+    for char in moderated_content:
+        if char.isalpha():
+            letter_count+=1
+            if char.isupper():
+                uppercase_count+=1
+
+    if letter_count>15 and letter_count>0:
+        ratio=uppercase_count/letter_count
+        if ratio>0.7:
+            score+=0.5
+
+    #EXTRA RULE: Every comment including "referral","giveaway" and "link" +1 on score per occurence
+    #Also shows a "content under mod review" text so people don't see soft spamming
+    SPAM_DATA=["referral","link","giveaway"]
+    message=["content under mod review"]
+
+    spam_score=0
+    lowercasewords=moderated_content.lower()
+
+    for spamword in SPAM_DATA:
+        count=lowercasewords.count(spamword)
+        if count>0:
+            spam_score+=count*1.0
     
+    if spam_score>0:
+        score+=spam_score
+        if moderated_content not in ["[content removed due to severe violation]",
+                                     "[content removed due to spam/scam policy]","[link removed]" ]:
+            moderated_content=message
+
+
     return moderated_content, score
 
 
 if __name__ == '__main__':
     app.run(debug=True, port=8080)
-
