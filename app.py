@@ -1,5 +1,5 @@
 from ntpath import join
-from flask import Flask, render_template, request, redirect, url_for, session, flash, g
+from flask import Flask, render_template, request, redirect, url_for, session, flash, g, abort
 from werkzeug.security import generate_password_hash, check_password_hash
 from cryptography.fernet import Fernet
 import collections
@@ -891,7 +891,61 @@ def recommend(user_id, filter_following):
     - https://www.researchgate.net/publication/227268858_Recommender_Systems_Handbook
     """
 
-    recommended_posts = {} 
+    #Default query. If user not logged in shows 5 new posts from all:
+
+    if not user_id:
+        return query_db('''SELECT p.id,p.content,p.created_at,u.username,u.id AS user_id FROM posts AS p JOIN users AS u ON p.user_id=u.id ORDER BY p.created_at DESC LIMIT 5''',())
+
+    #Fetch content that user reacted positively, otherwise show same as not logged in:
+
+    liked_content=query_db('''SELECT p.content FROM posts AS p JOIN reactions AS r ON p.id=r.post_id WHERE r.user_id=? AND r.reaction_type IN ('like','love','laugh','wow')''',(user_id,))
+    
+    if not liked_content:
+          return query_db('''SELECT p.id,p.content,p.created_at,u.username,u.id AS user_id FROM posts AS p JOIN users AS u ON p.user_id=u.id WHERE p.user_id!=? ORDER BY p.created_at DESC LIMIT 5''',(user_id,))      
+
+    #Find the most common keywords, get the to 10 common:
+    word_counts=collections.Counter()
+    to_ignore={'a','an','the','in','on','is','it','to','for','of','and','with','i','you','my','what','that','this','have','do','just','me','not'}
+
+    for posts in liked_content:
+        words=re.findall(r'\b\w+\b',posts['content'].lower())
+        for word in words:
+            if word not in to_ignore and len(word)>2:
+                word_counts[word] += 1
+
+    top_matches=[word for word,_ in word_counts.most_common(10)]
+
+    #Gathering posts based on "following" (if not, everyone). Also reacted posts.
+    if filter_following:
+        content_posts=query_db('''SELECT p.id, p.content, p.created_at,u.username,u.id as user_id FROM posts AS p JOIN users AS u ON p.user_id=u.id WHERE p.user_id IN (SELECT followed_id FROM follows WHERE follower_id=?)''',(user_id,))
+    else:
+        content_posts=query_db('''SELECT p.id,p.content,p.created_at,u.username,u.id AS user_id FROM posts AS p JOIN users AS u ON p.user_id=u.id''',())
+
+    reacted_posts={post['id'] for post in query_db('''SELECT post_id AS id FROM reactions WHERE user_id=?''',(user_id,))}
+    recommended_post_score=[]
+
+    #Score based on rules previously discussed
+    for post in content_posts:
+        if post['user_id']==user_id:
+            continue
+        if post['id'] in reacted_posts:
+            continue
+
+        match_score=0
+        post_content_lower=post['content'].lower()
+
+        for keyword in top_matches:
+            if keyword in post_content_lower:
+                match_score+=1
+
+        if match_score>0:
+            post_dict=dict(post)
+            post_dict['match_score']=match_score
+            recommended_post_score.append(post_dict)
+
+    #Sort by match THEN created_date, show only top 5
+    recommended_post_score.sort(key=lambda p: (p['match_score'],p['created_at']),reverse=True)
+    recommended_posts = [p for p in recommended_post_score[:5]]
 
     return recommended_posts;
 
@@ -912,7 +966,7 @@ def user_risk_analysis(user_id):
     
     score = 0
     #Preparation 
-    userinfo=query_db('SELECT * FROM users WHERE id=?',user_id,one=True)
+    userinfo=query_db('''SELECT * FROM users WHERE id=?''',user_id,one=True)
     user=dict(userinfo)
     created_at = datetime.strptime(user['created_at'])
     account_age=(datetime.now()-created_at).days
@@ -926,7 +980,7 @@ def user_risk_analysis(user_id):
         _,profile=moderate_content(user['profile'])
 
     #2: Post score:
-    posts=query_db('SELECT content FROM posts WHERE user_id=?',(user_id,))
+    posts=query_db('''SELECT content FROM posts WHERE user_id=?''',(user_id,))
     if len(posts)>0:
         post_score=0.0
         for post in posts:
@@ -934,7 +988,7 @@ def user_risk_analysis(user_id):
             post_score+=prisk
         avgpost=post_score/len(posts)
     #3: Comment Score:
-    comments=query_db('SELECT content FROM comments WHERE userid=?',(user_id,))
+    comments=query_db('''SELECT content FROM comments WHERE userid=?''',(user_id,))
     if len(comments)>0:
         comment_score=0.0
         for comment in comments:
