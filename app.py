@@ -911,7 +911,51 @@ def user_risk_analysis(user_id):
     """
     
     score = 0
+    #Preparation 
+    userinfo=query_db('SELECT * FROM users WHERE id=?',user_id,one=True)
+    user=dict(userinfo)
+    created_at = datetime.strptime(user['created_at'])
+    account_age=(datetime.now()-created_at).days
 
+    profile=0.0
+    avgpost=0.0
+    avgcomment=0.0
+
+    #1. Profile score:
+    if user.get('profile') is not None:
+        _,profile=moderate_content(user['profile'])
+
+    #2: Post score:
+    posts=query_db('SELECT content FROM posts WHERE user_id=?',(user_id,))
+    if len(posts)>0:
+        post_score=0.0
+        for post in posts:
+            _;prisk=moderate_content(post['content'])
+            post_score+=prisk
+        avgpost=post_score/len(posts)
+    #3: Comment Score:
+    comments=query_db('SELECT content FROM comments WHERE userid=?',(user_id,))
+    if len(comments)>0:
+        comment_score=0.0
+        for comment in comments:
+            _,crisk=moderate_content(comment['content'])
+            comment_score+=crisk
+        avgcomment=comment_score/len(comments)
+
+    #4. Combine scores
+    content_risk= ((profile*1.0)+(avgpost*3.0)+(avgcomment*1.0))
+    user_risk=content_risk
+
+    #5. Age Multiplier
+    if account_age <7:
+        user_risk=content_risk*1.5
+    elif account_age <30:
+        user_risk=content_risk*1.2
+
+
+    #6: Capping:
+
+    score=min(user_risk,5.0)
     return score;
 
     
