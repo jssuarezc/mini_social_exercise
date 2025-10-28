@@ -10,6 +10,21 @@
       <div class="col-md-12">
         <div class="card-body">
           <h2 class="card-title">{{ user_display(user.username) }}</h2>
+          <div class="btn btn-primary mt-2 px-3 py-1 rounded-full text-dark text-sm inline-block
+            {% if mood_label == 'positive' %}
+                <a href="#" class="px-3 py-2 fs-6">
+                    {{ mood_icon }} {{ mood_label|capitalize }} ({{ '%.2f'|format(mood_score) }})
+                </a>
+            {% elif mood_label == 'neutral' %}
+                <a href="#" class="px-3 py-2 fs-6">
+                    {{ mood_icon }} {{ mood_label|capitalize }} ({{ '%.2f'|format(mood_score) }})
+                </a>
+            {% else %}
+                <a href="#" class="px-3 py-2 fs-6">
+                    {{ mood_icon }} {{ mood_label|capitalize }} ({{ '%.2f'|format(mood_score) }})
+                </a>
+            {% endif %}
+          </div>
           <p class="card-text text-muted mb-3">
             <strong>Location:</strong> {{ user.location or "N/A" }}<br>
             <strong>Birthdate:</strong> {{ user.birthdate or "N/A" }}<br>

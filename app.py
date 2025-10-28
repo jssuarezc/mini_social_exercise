@@ -7,6 +7,17 @@ import json
 import sqlite3
 import hashlib
 import re
+import pandas as pd
+from statistics import mean
+from gensim.corpora import Dictionary
+from gensim.models.ldamodel import LdaModel
+from gensim.models.coherencemodel import CoherenceModel
+from gensim.models.phrases import Phrases, Phraser
+from nltk.stem import WordNetLemmatizer
+from nltk.corpus import stopwords
+from nltk.tokenize import word_tokenize
+from nltk.sentiment.vader import SentimentIntensityAnalyzer
+import nltk
 from datetime import datetime
 
 app = Flask(__name__)
@@ -315,13 +326,19 @@ def user_profile(username):
             is_currently_following = True
     # --
 
+    #HW4.4 Mood tags and alter of the user_profile route:
+
+    mood_label,mood_icon, mood_score= get_user_mood(user['id'])
     return render_template('user_profile.html.j2', 
                            user=user, 
                            posts=posts, 
                            comments=comments,
                            followers_count=followers_count, 
                            following_count=following_count,
-                           is_following=is_currently_following)
+                           is_following=is_currently_following,
+                           mood_label=mood_label,
+                           mood_icon=mood_icon,
+                           mood_score=mood_score)
     
 
 @app.route('/u/<username>/followers')
@@ -1112,6 +1129,95 @@ def moderate_content(content):
 
 
     return moderated_content, score
+
+#HW 4.2
+#----
+
+SENTIMENT_THRESHOLD = 0.05
+TONE_SYMBOLS = {
+    'positive': ("POSITIVE", "⬆️"),
+    'negative': ("NEGATIVE", "⬇️"),
+    'neutral': ("NEUTRAL", "⚪")
+}
+
+def _classify_sentiment(score):
+    if score > SENTIMENT_THRESHOLD:
+        return 'positive'
+    elif score < -SENTIMENT_THRESHOLD:
+        return 'negative'
+    else:
+        return 'neutral'
+
+def analyze_topic_and_platform_sentiment(posts_df, comments_df):
+
+    sia = SentimentIntensityAnalyzer()
+    
+    posts_df['compound_score'] = posts_df['content'].apply(lambda x: sia.polarity_scores(str(x))['compound'])
+    comments_df['compound_score'] = comments_df['content'].apply(lambda x: sia.polarity_scores(str(x))['compound'])
+
+    print("\n--- Platform-Wide Sentiment Assessment ---")
+
+    post_mean_score = posts_df['compound_score'].mean()
+    post_tone_key = _classify_sentiment(post_mean_score)
+    post_tone_str, post_symbol = TONE_SYMBOLS[post_tone_key]
+    
+    print(f"\n[POSTS]: Mean Score: {post_mean_score:.3f}")
+    print(f"         Tone Status: {post_symbol} {post_tone_str}")
+
+    comment_mean_score = comments_df['compound_score'].mean()
+    comment_tone_key = _classify_sentiment(comment_mean_score)
+    comment_tone_str, comment_symbol = TONE_SYMBOLS[comment_tone_key]
+    
+    print(f"\n[COMMENTS]: Mean Score: {comment_mean_score:.3f}")
+    print(f"            Tone Status: {comment_symbol} {comment_tone_str}")
+    
+    if 'topic_name' not in posts_df.columns:
+        print("\nERROR: Cannot analyze sentiment by topic. 'topic_name' column is missing.")
+        return pd.Series()
+
+    topic_scores_ranked = posts_df.groupby('topic_name')['compound_score'].mean().sort_values(ascending=False)
+    
+    print("\n\nTOPIC SENTIMENT BREAKDOWN (Ranked by Positivity):")
+    
+    for topic_label, score in topic_scores_ranked.items():
+        tone_key = _classify_sentiment(score)
+        tone_str, symbol = TONE_SYMBOLS[tone_key]
+        
+        print(f" {symbol} {topic_label:<25} : Score {score:.3f} ({tone_str})")
+
+    print("\nAnalysis complete.")
+    
+    return topic_scores_ranked
+
+
+
+
+
+#HW 4.4: User Sentiment badge:
+
+def get_user_mood(user_id):
+    sia=SentimentIntensityAnalyzer()
+    posts=query_db('''SELECT content FROM posts WHERE user_id=?''',(user_id,))
+    comments=query_db('''SELECT content FROM comments WHERE user_id=?''',(user_id,))
+
+    scores=[]
+    for item in posts + comments:
+        text= item['content']
+        if text:
+            results=sia.polarity_scores(str(text))
+            scores.append(results['compound'])
+
+    if not scores:
+        return 'neutral','😐',0.0
+    
+    avg=mean(scores)
+    if avg>0.05:
+        return 'positive','😊',avg
+    elif avg<-0.05:
+        return 'negative', '😔',avg
+    else:
+        return 'neutral','😐',0.0
+
 
 
 if __name__ == '__main__':
